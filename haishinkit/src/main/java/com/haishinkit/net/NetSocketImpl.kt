@@ -29,20 +29,11 @@ class NetSocketImpl :
         get() = Dispatchers.IO
     private var inputBuffer = ByteBuffer.allocate(DEFAULT_WINDOW_SIZE_C)
     private var socket: Socket? = null
+    // obslive patch: no auto-close in setters — closing a TLS stream writes close_notify
+    // (network I/O) and must not run on the caller's thread (NetworkOnMainThreadException
+    // when teardown is initiated from the main thread). All closing happens in close().
     private var inputStream: InputStream? = null
-        set(value) {
-            if (value == null) {
-                field?.close()
-            }
-            field = value
-        }
     private var outputStream: OutputStream? = null
-        set(value) {
-            if (value == null) {
-                field?.close()
-            }
-            field = value
-        }
     private var outputQueue = LinkedBlockingDeque<ByteBuffer>()
     private var outputBufferPool = Pools.SimplePool<ByteBuffer>(1024)
 
@@ -71,9 +62,17 @@ class NetSocketImpl :
             return
         }
         keepAlive = false
+        val ins = inputStream
+        val outs = outputStream
+        val sock = socket
         inputStream = null
         outputStream = null
-        socket?.close()
+        // obslive patch: close on the IO dispatcher — TLS close performs network I/O.
+        launch {
+            runCatching { ins?.close() }
+            runCatching { outs?.close() }
+            runCatching { sock?.close() }
+        }
         outputQueue.add(ByteBuffer.allocate(0))
         listener?.onClose(disconnected)
     }
