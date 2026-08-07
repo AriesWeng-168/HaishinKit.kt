@@ -13,8 +13,15 @@ internal class AudioCodecBuffer {
 
     fun append(byteBuffer: ByteBuffer) {
         val buffer = pool.acquire() ?: ByteBuffer.allocateDirect(byteBuffer.capacity())
-        buffer.rewind()
+        // clear() + flip() so the buffer's limit reflects the bytes actually written. With the old
+        // rewind() the limit stayed at capacity, so render() pushed capacity-sized blocks — payload
+        // plus stale garbage — into the encoder. When the mic chunk is smaller than the pooled
+        // buffer's capacity that multiplies the PCM volume (measured 8.5x on Samsung A14): the AAC
+        // encoder emits that many extra frames and the audio track races ahead of video, so
+        // receivers (e.g. Facebook) discard it as out of sync.
+        buffer.clear()
         buffer.put(byteBuffer)
+        buffer.flip()
         // Lock-free callers race with render()/clear(): a size-check followed by pop() can hit an
         // emptied deque and throw, killing the capture coroutine upstream. Use the non-throwing
         // offer/pollFirst pair instead, dropping the oldest frame (returned to the pool) when full.
