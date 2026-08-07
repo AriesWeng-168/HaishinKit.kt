@@ -69,7 +69,7 @@ abstract class Codec :
             if (field == null) {
                 field =
                     if (mode == MODE_ENCODE) {
-                        MediaCodec.createEncoderByType(outputMimeType)
+                        createNonSecureEncoder(outputMimeType)
                     } else {
                         MediaCodec.createDecoderByType(inputMimeType)
                     }
@@ -82,6 +82,24 @@ abstract class Codec :
             field?.release()
             field = value
         }
+
+    /**
+     * obslive patch: createEncoderByType may return a SECURE encoder variant on some devices
+     * (e.g. Samsung A14 / MTK lists c2.mtk.avc.encoder.secure first). A secure encoder emits
+     * protected output buffers: csd extraction fails (IllegalStateException in RtmpMuxer) and
+     * touching the secure video path from a normal app can kernel-panic the device.
+     * Pick the first non-secure encoder for the mime type instead.
+     */
+    private fun createNonSecureEncoder(mimeType: String): MediaCodec {
+        val name = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+            .codecInfos
+            .firstOrNull { info ->
+                info.isEncoder &&
+                    !info.name.endsWith(".secure") &&
+                    info.supportedTypes.any { it.equals(mimeType, ignoreCase = true) }
+            }?.name
+        return if (name != null) MediaCodec.createByCodecName(name) else MediaCodec.createEncoderByType(mimeType)
+    }
 
     /**
      * Specifies the mode of encoding or decoding.
