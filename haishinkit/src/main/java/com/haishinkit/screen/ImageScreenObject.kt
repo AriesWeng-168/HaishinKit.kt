@@ -55,8 +55,11 @@ open class ImageScreenObject(
             if (field == value) return
             // Don't recycle() the outgoing bitmap: the GL thread may be mid-texImage2D with it
             // (layout runs on ThreadScreen), and uploading a recycled bitmap ranges from a thrown
-            // IllegalArgumentException to a native crash. Since API 26 bitmap pixel memory lives
-            // on the Java heap and is reclaimed by GC, dropping the reference is enough.
+            // IllegalArgumentException to a native crash. Since API 26 bitmap pixels live in
+            // NATIVE memory tracked by NativeAllocationRegistry — GC reclaims them via that
+            // registry, so dropping the reference is enough.
+            // Upload-cache contract: layout uploads only when the REFERENCE changes — redrawing
+            // the same Bitmap in place will NOT re-upload; always assign a new Bitmap.
             field = value
             invalidateLayout()
         }

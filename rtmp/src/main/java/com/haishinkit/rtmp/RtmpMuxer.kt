@@ -37,7 +37,7 @@ internal class RtmpMuxer(
     // lip sync is off by exactly that skew. Anchor every track to the first frame seen on ANY
     // track so cross-track offsets survive muxing. Clamped so a track whose first frame predates
     // the epoch (encode-latency jitter) starts at 0 instead of a negative timestamp.
-    private var epochUs = 0L
+    @Volatile private var epochUs = 0L // 兩條 codec callback 執行緒都會碰（可見性）
     private var frameTracker: FrameTracker? = null
         get() {
             if (field == null && BuildConfig.DEBUG) {

@@ -36,7 +36,8 @@ class AudioRecordSource(
             }
             return field
         }
-    var audioRecord: AudioRecord? = null
+    private var record: AudioRecord? = null
+    val audioRecord: AudioRecord?
         get() {
             if (ActivityCompat.checkSelfPermission(
                     context,
@@ -45,12 +46,11 @@ class AudioRecordSource(
             ) {
                 return null
             }
-            if (field == null) {
-                field = createAudioRecord(audioSource, sampleRate, channel, encoding, minBufferSize)
+            if (record == null) {
+                record = createAudioRecord(audioSource, sampleRate, channel, encoding, minBufferSize)
             }
-            return field
+            return record
         }
-        private set
 
     private var encoding = DEFAULT_ENCODING
     private var sampleCount = DEFAULT_SAMPLE_COUNT
@@ -71,20 +71,20 @@ class AudioRecordSource(
     }
 
     override suspend fun close(): Result<Unit> {
-        try {
-            audioRecord?.stop()
-            audioRecord?.release()
+        // Read the backing field directly: going through the self-creating getter meant a second
+        // close() (or close-before-open) built a fresh AudioRecord just to throw on stop() —
+        // and that instance was never released (native mic handle leak until finalizer).
+        val rec = record ?: return Result.success(Unit)
+        record = null // released instances must never be reused (startRecording throws, read spins)
+        return try {
+            rec.stop()
+            Result.success(Unit)
         } catch (e: java.lang.IllegalStateException) {
             Log.w(TAG, e)
-            return Result.failure(e)
+            Result.failure(e)
         } finally {
-            // A released AudioRecord must not be reused: startRecording() on it throws and read()
-            // then returns an error code immediately, which spun the capture loop at CPU speed
-            // shipping stale PCM (audio timestamps raced ~9x ahead of video, receivers dropped the
-            // track). Null the field so the next open() builds a fresh recorder.
-            audioRecord = null
+            runCatching { rec.release() } // release even when stop() throws
         }
-        return Result.success(Unit)
     }
 
     override fun read(track: Int): MediaBuffer {
@@ -92,11 +92,23 @@ class AudioRecordSource(
         val result = audioRecord?.read(byteBuffer, sampleCount * 2) ?: -1
         if (result <= 0) {
             statEmpty += 1
-            // No data (recorder released, not started, or mid-transition): pace the loop instead of
-            // busy-spinning, and ship an empty payload so no stale PCM reaches the encoder.
+            if (result == AudioRecord.ERROR_DEAD_OBJECT) {
+                // mediaserver restarted: this instance never recovers — rebuild and restart, or
+                // audio is gone for the rest of the stream (10ms error spins, zero telemetry).
+                runCatching { record?.release() }
+                record = null
+                runCatching { audioRecord?.startRecording() }
+            }
+            // Under the frozen-PTS design the audio timeline advances by consumed samples only:
+            // an EMPTY payload here cuts the stall out of the timeline, leaving audio permanently
+            // ahead of video by the stall length. Ship real-time-paced SILENCE instead so the
+            // sample clock keeps tracking wall time (10ms sleep → 10ms of zeros).
             Thread.sleep(10)
+            val silenceBytes = (sampleRate / 100) * 2 // 10ms of 16-bit mono
+            byteBuffer.clear()
+            for (i in 0 until silenceBytes) byteBuffer.put(i, 0)
             byteBuffer.position(0)
-            byteBuffer.limit(0)
+            byteBuffer.limit(silenceBytes)
             return MediaBuffer(
                 type = MediaType.AUDIO,
                 index = track,

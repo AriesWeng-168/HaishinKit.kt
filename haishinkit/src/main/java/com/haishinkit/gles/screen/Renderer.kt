@@ -50,7 +50,11 @@ internal class Renderer(
                 // render thread — that silently stops composition and the encoded fps collapses
                 // (viewers/platforms see single-digit fps). Skip the frame and log the identity.
                 if (bitmap.isRecycled) {
-                    Log.e(TAG, "texImage2D skipped: recycled bitmap on ${screenObject.javaClass.simpleName}")
+                    if (screenObject.uploadedBitmap !== bitmap) {
+                        Log.e(TAG, "texImage2D skipped: recycled bitmap on ${screenObject.javaClass.simpleName}")
+                        screenObject.uploadedBitmap = bitmap // 同一顆壞圖只報一次（每 layout 刷屏）
+                        screenObject.uploadedTextureId = screenObject.textureId
+                    }
                     return
                 }
                 if (screenObject.uploadedBitmap === bitmap &&
@@ -72,6 +76,8 @@ internal class Renderer(
                             "recycled=${bitmap.isRecycled} obj=${screenObject.javaClass.simpleName}",
                         e,
                     )
+                    screenObject.uploadedBitmap = bitmap // 失敗也記錄，換新圖才重試（防 30-60 行/秒刷 log）
+                    screenObject.uploadedTextureId = screenObject.textureId
                     return
                 }
                 GLES20.glTexParameteri(

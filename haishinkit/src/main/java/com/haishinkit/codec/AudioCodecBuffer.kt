@@ -9,6 +9,8 @@ internal class AudioCodecBuffer {
     var presentationTimestamp: Long = DEFAULT_PRESENTATION_TIMESTAMP
         private set
     private var pool = Pools.SynchronizedPool<ByteBuffer>(CAPACITY * 2)
+    private var dropped = 0L
+    private var lastReportedDrops = 0L
     private var buffers = LinkedBlockingDeque<ByteBuffer>(CAPACITY)
 
     fun append(byteBuffer: ByteBuffer) {
@@ -28,10 +30,16 @@ internal class AudioCodecBuffer {
         var attempts = 0
         while (!buffers.offer(buffer)) {
             buffers.pollFirst()?.let { pool.release(it) }
+            dropped += 1
             if (++attempts > CAPACITY) {
                 pool.release(buffer)
                 return
             }
+        }
+        // 丟幀＝凍結 PTS 下音訊時間軸永久前移 ~23ms/塊 —— 必須看得見（每 32 塊報一次）。
+        if (dropped > 0 && dropped != lastReportedDrops && dropped % 32 == 0L) {
+            lastReportedDrops = dropped
+            android.util.Log.w("AudioCodecBuffer", "encoder stalled: dropped=$dropped chunks (~${dropped * 23}ms of audio timeline)")
         }
     }
 

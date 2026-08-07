@@ -73,12 +73,14 @@ class MediaMixer(
     override val coroutineContext: CoroutineContext
         get() = Dispatchers.IO
 
-    private var outputs = mutableListOf<MediaOutput>()
+    // CopyOnWrite/Concurrent：擷取迴圈與 attach/register 跨執行緒並發，裸集合的
+    // ConcurrentModificationException 會讓那一輪 chunk 遺失（23ms 空洞）。
+    private var outputs: MutableList<MediaOutput> = java.util.concurrent.CopyOnWriteArrayList()
 
     @Volatile
     private var keepAlive = true
-    private var videoSources = mutableMapOf<Int, VideoSource>()
-    private var audioSources = mutableMapOf<Int, AudioSource>()
+    private var videoSources: MutableMap<Int, VideoSource> = java.util.concurrent.ConcurrentHashMap()
+    private var audioSources: MutableMap<Int, AudioSource> = java.util.concurrent.ConcurrentHashMap()
     private val videoContainer: ScreenObjectContainer by lazy {
         ScreenObjectContainer().apply {
             addChild(VideoScreenObject())

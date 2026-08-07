@@ -12,6 +12,7 @@ import com.haishinkit.gles.GraphicsContext
 import com.haishinkit.gles.Utils
 import com.haishinkit.lang.Running
 import com.haishinkit.media.source.VideoSource
+import com.haishinkit.screen.ImageScreenObject
 import com.haishinkit.screen.ScreenObject
 import com.haishinkit.screen.VideoScreenObject
 import java.nio.ByteBuffer
@@ -77,6 +78,13 @@ internal class Screen(
                 textureIds[0] = screenObject.textureId
                 GLES20.glDeleteTextures(1, textureIds, 0)
                 screenObject.textureId = 0
+                // Invalidate the upload cache: deleted GL names get reused by the next
+                // glGenTextures, so a re-added object with the same bitmap would false-hit the
+                // cache and sample an incomplete texture (silent black, no log).
+                if (screenObject is ImageScreenObject) {
+                    screenObject.uploadedBitmap = null
+                    screenObject.uploadedTextureId = -1
+                }
             }
         }
     }
