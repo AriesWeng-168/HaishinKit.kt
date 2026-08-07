@@ -30,6 +30,14 @@ internal class RtmpMuxer(
         }
     private var audioTimestamp = 0L
     private var videoTimestamp = 0L
+
+    // Shared A/V epoch: both encoders stamp frames on the System.nanoTime() clock, but anchoring
+    // each track at its own first frame erases the real capture-start skew between them (audio
+    // starts ~0.3-1.5s after video on a fresh AudioRecord) — receivers then play audio early and
+    // lip sync is off by exactly that skew. Anchor every track to the first frame seen on ANY
+    // track so cross-track offsets survive muxing. Clamped so a track whose first frame predates
+    // the epoch (encode-latency jitter) starts at 0 instead of a negative timestamp.
+    private var epochUs = 0L
     private var frameTracker: FrameTracker? = null
         get() {
             if (field == null && BuildConfig.DEBUG) {
@@ -62,6 +70,7 @@ internal class RtmpMuxer(
     fun clear() {
         audioTimestamp = 0L
         videoTimestamp = 0L
+        epochUs = 0L
         frameTracker?.clear()
         audioBufferController.clear()
         videoBufferController.clear()
@@ -237,7 +246,10 @@ internal class RtmpMuxer(
                 }
                 frameTracker?.track(FrameTracker.TYPE_VIDEO, SystemClock.uptimeMillis())
                 if (videoTimestamp == 0L) {
-                    videoTimestamp = info.presentationTimeUs
+                    if (epochUs == 0L) {
+                        epochUs = info.presentationTimeUs
+                    }
+                    videoTimestamp = minOf(epochUs, info.presentationTimeUs)
                 }
                 val timestamp = (info.presentationTimeUs - videoTimestamp).toInt()
                 val keyframe = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
@@ -271,7 +283,10 @@ internal class RtmpMuxer(
                 }
                 frameTracker?.track(FrameTracker.TYPE_VIDEO, SystemClock.uptimeMillis())
                 if (videoTimestamp == 0L) {
-                    videoTimestamp = info.presentationTimeUs
+                    if (epochUs == 0L) {
+                        epochUs = info.presentationTimeUs
+                    }
+                    videoTimestamp = minOf(epochUs, info.presentationTimeUs)
                 }
                 val timestamp = (info.presentationTimeUs - videoTimestamp).toInt()
                 val keyframe = info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
@@ -317,7 +332,10 @@ internal class RtmpMuxer(
                 }
                 frameTracker?.track(FrameTracker.TYPE_AUDIO, SystemClock.uptimeMillis())
                 if (audioTimestamp == 0L) {
-                    audioTimestamp = info.presentationTimeUs
+                    if (epochUs == 0L) {
+                        epochUs = info.presentationTimeUs
+                    }
+                    audioTimestamp = minOf(epochUs, info.presentationTimeUs)
                 }
                 val timestamp = (info.presentationTimeUs - audioTimestamp).toInt()
                 val audio = stream.messageFactory.createRtmpAudioMessage()
