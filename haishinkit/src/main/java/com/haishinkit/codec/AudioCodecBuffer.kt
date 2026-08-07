@@ -48,10 +48,12 @@ internal class AudioCodecBuffer {
         presentationTimestamp = DEFAULT_PRESENTATION_TIMESTAMP
     }
 
-    // presentationTimestamp is in microseconds (seeded from nanoTime/1000); the increment must be
-    // too. The old seconds-based formula truncated to 0 for any sub-second frame, freezing the PTS
-    // on encoders that pass input timestamps through instead of interpolating by consumed samples.
-    private fun timestamp(sampleCount: Int): Long = sampleCount * 1_000_000L / sampleRate
+    // Intentionally returns 0 (upstream behavior): render()'s `result` is the bytes copied from a
+    // pooled buffer whose capacity can exceed the valid PCM payload, so deriving a duration from it
+    // overruns real time (measured 8.5x on Samsung A14 — receivers then see audio racing ahead of
+    // video and discard it). With a frozen input PTS the MediaCodec AAC encoder interpolates output
+    // timestamps from the anchor by consumed samples, which measures correct on-device.
+    private fun timestamp(sampleCount: Int): Long = ((sampleCount.toFloat() / sampleRate.toFloat())).toLong()
 
     companion object {
         const val CAPACITY = 4
