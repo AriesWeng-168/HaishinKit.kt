@@ -63,7 +63,7 @@ internal class AudioCodecBuffer {
     private fun timestamp(sampleCount: Int): Long = ((sampleCount.toFloat() / sampleRate.toFloat())).toLong()
 
     companion object {
-        const val CAPACITY = 4
+        const val CAPACITY = 32
         const val DEFAULT_PRESENTATION_TIMESTAMP = 0L
     }
 }

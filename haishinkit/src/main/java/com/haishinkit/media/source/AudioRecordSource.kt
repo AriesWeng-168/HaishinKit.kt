@@ -29,7 +29,10 @@ class AudioRecordSource(
     var minBufferSize = -1
         get() {
             if (field == -1) {
-                field = AudioRecord.getMinBufferSize(sampleRate, channel, encoding)
+                // 8x the OS minimum (~40ms): with the bare minimum any scheduling stall over the
+                // buffer depth makes the HAL drop samples silently — measured as the audio track
+                // advancing at ~0.92x wall clock (5s/min of drift against video).
+                field = AudioRecord.getMinBufferSize(sampleRate, channel, encoding) * 8
             }
             return field
         }
@@ -51,6 +54,10 @@ class AudioRecordSource(
 
     private var encoding = DEFAULT_ENCODING
     private var sampleCount = DEFAULT_SAMPLE_COUNT
+    private var statReads = 0L
+    private var statBytes = 0L
+    private var statEmpty = 0L
+    private var statSinceNanos = 0L
     private var noSignalBuffer = ByteBuffer.allocateDirect(0)
     private var byteBuffer: ByteBuffer = ByteBuffer.allocateDirect(sampleCount * 2)
 
@@ -84,6 +91,7 @@ class AudioRecordSource(
         byteBuffer.clear()
         val result = audioRecord?.read(byteBuffer, sampleCount * 2) ?: -1
         if (result <= 0) {
+            statEmpty += 1
             // No data (recorder released, not started, or mid-transition): pace the loop instead of
             // busy-spinning, and ship an empty payload so no stale PCM reaches the encoder.
             Thread.sleep(10)
@@ -97,8 +105,15 @@ class AudioRecordSource(
                 sync = true,
             )
         }
-        byteBuffer.position(0)
-        byteBuffer.limit(result)
+        statReads += 1
+        statBytes += result
+        if (statSinceNanos == 0L) statSinceNanos = System.nanoTime()
+        if (statReads % 512 == 0L) {
+            val secs = (System.nanoTime() - statSinceNanos) / 1e9
+            val hz = statBytes / 2 / secs
+            Log.i(TAG, "mic stats: reads=$statReads empty=$statEmpty bytes=$statBytes wall=${"%.1f".format(secs)}s effRate=${hz.toInt()}Hz (want=$sampleRate)")
+            statBytes = 0; statEmpty = 0; statSinceNanos = System.nanoTime()
+        }
         if (isMuted) {
             for (i in 0 until result) {
                 byteBuffer.put(i, 0)
