@@ -2,6 +2,7 @@ package com.haishinkit.media
 
 import android.content.Context
 import android.hardware.SensorManager
+import android.util.Log
 import android.view.OrientationEventListener
 import android.view.WindowManager
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -221,14 +222,24 @@ class MediaMixer(
     private fun startAudioCapturing() =
         launch {
             while (keepAlive) {
-                if (audioSources.isEmpty()) {
-                    delay(1000)
-                }
-                audioSources.forEach { audio ->
-                    val buffer = audio.value.read(audio.key)
-                    outputs.forEach { output ->
-                        output.append(buffer)
+                // One bad read/append (e.g. a codec buffer race during a stop/start transition)
+                // must not kill this coroutine: video keeps flowing without it, so the stream
+                // would silently lose audio for the rest of the mixer's life.
+                try {
+                    if (audioSources.isEmpty()) {
+                        delay(1000)
                     }
+                    audioSources.forEach { audio ->
+                        val buffer = audio.value.read(audio.key)
+                        outputs.forEach { output ->
+                            output.append(buffer)
+                        }
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "audio capture iteration failed, continuing", e)
+                    delay(20)
                 }
             }
         }

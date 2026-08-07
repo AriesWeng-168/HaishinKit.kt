@@ -15,11 +15,16 @@ internal class AudioCodecBuffer {
         val buffer = pool.acquire() ?: ByteBuffer.allocateDirect(byteBuffer.capacity())
         buffer.rewind()
         buffer.put(byteBuffer)
-        if (buffers.size < CAPACITY) {
-            buffers.add(buffer)
-        } else {
-            buffers.pop()
-            buffers.put(buffer)
+        // Lock-free callers race with render()/clear(): a size-check followed by pop() can hit an
+        // emptied deque and throw, killing the capture coroutine upstream. Use the non-throwing
+        // offer/pollFirst pair instead, dropping the oldest frame (returned to the pool) when full.
+        var attempts = 0
+        while (!buffers.offer(buffer)) {
+            buffers.pollFirst()?.let { pool.release(it) }
+            if (++attempts > CAPACITY) {
+                pool.release(buffer)
+                return
+            }
         }
     }
 
@@ -43,7 +48,10 @@ internal class AudioCodecBuffer {
         presentationTimestamp = DEFAULT_PRESENTATION_TIMESTAMP
     }
 
-    private fun timestamp(sampleCount: Int): Long = ((sampleCount.toFloat() / sampleRate.toFloat())).toLong()
+    // presentationTimestamp is in microseconds (seeded from nanoTime/1000); the increment must be
+    // too. The old seconds-based formula truncated to 0 for any sub-second frame, freezing the PTS
+    // on encoders that pass input timestamps through instead of interpolating by consumed samples.
+    private fun timestamp(sampleCount: Int): Long = sampleCount * 1_000_000L / sampleRate
 
     companion object {
         const val CAPACITY = 4
