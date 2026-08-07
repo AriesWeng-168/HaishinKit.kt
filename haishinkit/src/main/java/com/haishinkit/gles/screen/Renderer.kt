@@ -3,6 +3,7 @@ package com.haishinkit.gles.screen
 import android.content.Context
 import android.opengl.GLES20
 import android.opengl.GLUtils
+import android.util.Log
 import com.haishinkit.gles.ShaderLoader
 import com.haishinkit.gles.Utils
 import com.haishinkit.screen.ImageScreenObject
@@ -45,11 +46,28 @@ internal class Renderer(
 
             is ImageScreenObject -> {
                 val bitmap = screenObject.bitmap ?: return
+                // obslive patch: a bad bitmap (recycled / non-GL-uploadable) must not take down the
+                // render thread — that silently stops composition and the encoded fps collapses
+                // (viewers/platforms see single-digit fps). Skip the frame and log the identity.
+                if (bitmap.isRecycled) {
+                    Log.e(TAG, "texImage2D skipped: recycled bitmap on ${screenObject.javaClass.simpleName}")
+                    return
+                }
                 GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, screenObject.textureId)
                 Utils.checkGlError("glBindTexture")
                 GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
                 Utils.checkGlError("glPixelStorei")
-                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+                try {
+                    GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+                } catch (e: Exception) {
+                    Log.e(
+                        TAG,
+                        "texImage2D failed (skipped): config=${bitmap.config} ${bitmap.width}x${bitmap.height} " +
+                            "recycled=${bitmap.isRecycled} obj=${screenObject.javaClass.simpleName}",
+                        e,
+                    )
+                    return
+                }
                 GLES20.glTexParameteri(
                     screenObject.target,
                     GLES20.GL_TEXTURE_MIN_FILTER,
