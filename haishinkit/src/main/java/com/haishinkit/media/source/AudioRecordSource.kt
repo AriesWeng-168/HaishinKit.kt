@@ -70,20 +70,39 @@ class AudioRecordSource(
         } catch (e: java.lang.IllegalStateException) {
             Log.w(TAG, e)
             return Result.failure(e)
+        } finally {
+            // A released AudioRecord must not be reused: startRecording() on it throws and read()
+            // then returns an error code immediately, which spun the capture loop at CPU speed
+            // shipping stale PCM (audio timestamps raced ~9x ahead of video, receivers dropped the
+            // track). Null the field so the next open() builds a fresh recorder.
+            audioRecord = null
         }
         return Result.success(Unit)
     }
 
     override fun read(track: Int): MediaBuffer {
-        byteBuffer.rewind()
+        byteBuffer.clear()
         val result = audioRecord?.read(byteBuffer, sampleCount * 2) ?: -1
+        if (result <= 0) {
+            // No data (recorder released, not started, or mid-transition): pace the loop instead of
+            // busy-spinning, and ship an empty payload so no stale PCM reaches the encoder.
+            Thread.sleep(10)
+            byteBuffer.position(0)
+            byteBuffer.limit(0)
+            return MediaBuffer(
+                type = MediaType.AUDIO,
+                index = track,
+                payload = byteBuffer,
+                timestamp = 0,
+                sync = true,
+            )
+        }
+        byteBuffer.position(0)
+        byteBuffer.limit(result)
         if (isMuted) {
-            if (noSignalBuffer.capacity() < result) {
-                noSignalBuffer = ByteBuffer.allocateDirect(result)
+            for (i in 0 until result) {
+                byteBuffer.put(i, 0)
             }
-            noSignalBuffer.clear()
-            byteBuffer.clear()
-            byteBuffer.put(noSignalBuffer)
         }
         return MediaBuffer(
             type = MediaType.AUDIO,
