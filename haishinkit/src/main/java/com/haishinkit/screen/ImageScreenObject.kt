@@ -46,7 +46,10 @@ open class ImageScreenObject(
     var bitmap: Bitmap? = null
         set(value) {
             if (field == value) return
-            field?.recycle()
+            // Don't recycle() the outgoing bitmap: the GL thread may be mid-texImage2D with it
+            // (layout runs on ThreadScreen), and uploading a recycled bitmap ranges from a thrown
+            // IllegalArgumentException to a native crash. Since API 26 bitmap pixel memory lives
+            // on the Java heap and is reclaimed by GC, dropping the reference is enough.
             field = value
             invalidateLayout()
         }
