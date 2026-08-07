@@ -53,6 +53,12 @@ internal class Renderer(
                     Log.e(TAG, "texImage2D skipped: recycled bitmap on ${screenObject.javaClass.simpleName}")
                     return
                 }
+                if (screenObject.uploadedBitmap === bitmap &&
+                    screenObject.uploadedTextureId == screenObject.textureId
+                ) {
+                    // Same bitmap already on this texture: this layout pass is only a move.
+                    return
+                }
                 GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, screenObject.textureId)
                 Utils.checkGlError("glBindTexture")
                 GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
@@ -88,6 +94,8 @@ internal class Renderer(
                     GLES20.GL_TEXTURE_WRAP_T,
                     GLES20.GL_CLAMP_TO_EDGE,
                 )
+                screenObject.uploadedBitmap = bitmap
+                screenObject.uploadedTextureId = screenObject.textureId
             }
         }
     }

@@ -43,6 +43,13 @@ open class ImageScreenObject(
     }
 
     override val type: String = TYPE
+
+    // Renderer-side upload cache: texImage2D only when the bitmap reference (or the GL texture it
+    // was uploaded to) changed. Pure movement — margin/bounds updates via invalidateLayout — no
+    // longer re-uploads the full bitmap every frame (a scrolling marquee did this 30-60x/s).
+    internal var uploadedBitmap: Bitmap? = null
+    internal var uploadedTextureId: Int = -1
+
     var bitmap: Bitmap? = null
         set(value) {
             if (field == value) return

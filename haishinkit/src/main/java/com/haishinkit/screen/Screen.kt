@@ -29,7 +29,8 @@ abstract class Screen(
      */
     open var backgroundColor: Int = Color.BLACK
 
-    protected var callbacks = mutableListOf<Callback>()
+    // CopyOnWrite: the render thread iterates while callers register from other threads.
+    protected var callbacks: MutableList<Callback> = java.util.concurrent.CopyOnWriteArrayList()
 
     /**
      * Reads the pixels of a displayed image.
