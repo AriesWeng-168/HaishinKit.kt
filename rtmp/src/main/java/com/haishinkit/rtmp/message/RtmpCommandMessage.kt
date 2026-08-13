@@ -47,6 +47,7 @@ internal class RtmpCommandMessage(
         val responders = connection.responders
 
         if (responders.containsKey(transactionID)) {
+            android.util.Log.i("RtmpCommandMessage", "matched: name=$commandName txn=$transactionID")
             val responder = responders[transactionID]
             when (commandName) {
                 "_result" -> {
@@ -78,6 +79,14 @@ internal class RtmpCommandMessage(
             }
 
             else -> {
+                // obslive.15：這條路＝「沒有 responder 配對到的伺服器命令」。把身分記下來 ——
+                // 2026-08-13 CF 直推失敗查了一整天，就是因為這裡什麼都不記，
+                // 只看得到 arguments[0] 一個裸值（實測 1.0），連命令名都不知道。
+                android.util.Log.w(
+                    "RtmpCommandMessage",
+                    "unhandled command: name=$commandName txn=$transactionID streamID=$streamID " +
+                        "args=$arguments responders=${connection.responders.keys}",
+                )
                 connection.dispatchEventWith(
                     Event.RTMP_STATUS,
                     false,
