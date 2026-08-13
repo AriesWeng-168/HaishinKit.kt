@@ -52,16 +52,47 @@ internal class RtmpCommandMessage(
             when (commandName) {
                 "_result" -> {
                     responder?.onResult(arguments)
+                    // obslive.16：配對成功也要移除 —— 原版讓 responder 永遠留在表裡，
+                    // 下面的 txn=0 寬鬆配對會撿到這些殭屍、把回應餵錯對象。
+                    responders.remove(transactionID)
                     return this
                 }
 
                 "_error" -> {
                     responder?.onStatus(arguments)
+                    responders.remove(transactionID)
                     return this
                 }
             }
             responders.remove(transactionID)
             return this
+        }
+
+        // obslive.16：Cloudflare 的部分邊緣節點回覆 _result 時**不回顯 transaction id（一律 0）**，
+        // 嚴格比對永遠配不到 —— createStream 的回應（stream id）掉進下面的 catch-all、被當成
+        // 壞狀態，活連線被自己殺掉；因為是 anycast、各節點行為不一，表現為**間歇失敗**
+        // （2026-08-13 真機實錄：送出 txn=2、responders=[2]，CF 回 _result txn=0 args=[1.0]）。
+        //
+        // 依 ffmpeg 的語意寬鬆配對：txn=0 且有待回應命令時，交給**最早送出的那一個**（FIFO）——
+        // 伺服器按送出順序處理命令，按序配對即正確。只在 txn=0 時放寬：正常伺服器（mediamtx 等）
+        // 回顯真實 txn，直接走上面的嚴格配對，行為不變。
+        if (transactionID == 0 &&
+            (commandName == "_result" || commandName == "_error") &&
+            responders.isNotEmpty()
+        ) {
+            val entry = responders.entries.minByOrNull { it.key }
+            if (entry != null) {
+                android.util.Log.i(
+                    "RtmpCommandMessage",
+                    "loose-matched: name=$commandName txn=0 -> pending txn=${entry.key}",
+                )
+                when (commandName) {
+                    "_result" -> entry.value.onResult(arguments)
+                    else -> entry.value.onStatus(arguments)
+                }
+                responders.remove(entry.key)
+                return this
+            }
         }
 
         when (commandName) {
