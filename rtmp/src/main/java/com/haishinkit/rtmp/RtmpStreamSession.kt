@@ -101,6 +101,23 @@ internal class RtmpStreamSession(
             }
 
             else -> {
+                // obslive.14：**沒有 code 的事件不是狀態，忽略。**
+                //
+                // Cloudflare（Adobe 相容端）在 connect 成功後會送資訊性命令（onBWDone 等），
+                // RtmpCommandMessage 的 catch-all 會把它們派發成 RTMP_STATUS 事件、data 是裸值
+                // （實測 1.0）。先前這裡一律視為致命：continuation 以 RtmpStatusException("null")
+                // 失敗、readyState 直接 CLOSED —— 一條活得好好的連線被自己殺掉。
+                // 是否踩中取決於該命令與 NetStream.Publish.Start 誰先到，所以表現為**間歇失敗**
+                // （2026-08-13 真機 4 敗 1 成，mediamtx 不送這些命令故中繼路永遠通）。
+                //
+                // 真正的失敗不受影響：socket 斷線走 IO_ERROR，publish 被拒走帶 code 的
+                // onStatus（NetStream.Publish.BadName 等）—— 兩者都照樣進失敗分支。
+                if (data["code"] == null) {
+                    if (BuildConfig.DEBUG) {
+                        Log.d(TAG, "ignore non-status event: $data")
+                    }
+                    return
+                }
                 continuation?.resume(Result.failure(RtmpStatusException("${data["code"]}")))
                 continuation = null
                 _readyState.value = ReadyState.CLOSED
