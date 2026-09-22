@@ -109,15 +109,32 @@ internal class PixelTransform(
 
     override fun startRunning() {
         if (isRunning.get()) return
-        if (screen == null || surface == null) return
+        val surface = surface ?: return
+        if (screen == null) return
+        // obslive.17: setSurface 是經 handler 排隊後才執行的；SurfaceView 可能在排隊期間就 destroy 了
+        //（快速切背景／視窗還沒 attach），這時 eglCreateWindowSurface 會丟
+        // IllegalArgumentException("Make sure the SurfaceView ... has a valid Surface") 直接殺掉
+        // ThreadPixelTransform → 整個 App 閃退（2026-09-22 模擬器實錘）。先驗 isValid，建不起來就當
+        // 沒有 surface：下一次 surfaceCreated 會帶一顆新的 Surface 再來。
+        if (!surface.isValid) {
+            Log.w(TAG, "startRunning(): surface is not valid yet, waiting for the next one")
+            return
+        }
         if (BuildConfig.DEBUG) {
             Log.d(TAG, "startRunning()")
         }
         isRunning.set(true)
         video.videoGravity = videoGravity
-        graphicsContext.apply {
-            open((screen as? com.haishinkit.gles.screen.ThreadScreen)?.graphicsContext)
-            makeCurrent(createWindowSurface(surface))
+        try {
+            graphicsContext.apply {
+                open((screen as? com.haishinkit.gles.screen.ThreadScreen)?.graphicsContext)
+                makeCurrent(createWindowSurface(surface))
+            }
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "startRunning(): could not create the EGL window surface", e)
+            runCatching { graphicsContext.close() }
+            isRunning.set(false)
+            return
         }
         program = shaderLoader.getProgram(GLES20.GL_TEXTURE_2D, videoEffect)
         screen?.let {
