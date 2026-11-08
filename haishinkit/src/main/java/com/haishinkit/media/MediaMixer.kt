@@ -18,6 +18,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.lang.ref.WeakReference
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
@@ -73,6 +75,18 @@ class MediaMixer(
     override val coroutineContext: CoroutineContext
         get() = Dispatchers.IO
 
+    /**
+     * obslive.19：影片來源的接上／拆下／停起**依呼叫順序**一個一個做。
+     *
+     * 原本 startRunning／stopRunning 各自在 Dispatchers.IO（多執行緒）上 launch，重連時兩者緊接著呼叫，
+     * 誰的 attachVideo 訊息先送到畫面執行緒是不確定的。obslive.18 讓 unregister 真的會釋放材質之後，
+     * 「舊的 stop 晚到」就會把**剛註冊好的新材質**收掉 —— 那一軌（包括相機）就黑了。
+     * 單執行緒分派器保證協程依呼叫順序開始，Mutex 保證中途暫停時不會被下一個插隊。
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val videoLifecycle = Dispatchers.IO.limitedParallelism(1)
+    private val videoLock = Mutex()
+
     // CopyOnWrite/Concurrent：擷取迴圈與 attach/register 跨執行緒並發，裸集合的
     // ConcurrentModificationException 會讓那一輪 chunk 遺失（23ms 空洞）。
     private var outputs: MutableList<MediaOutput> = java.util.concurrent.CopyOnWriteArrayList()
@@ -122,9 +136,14 @@ class MediaMixer(
     suspend fun attachVideo(
         track: Int,
         video: VideoSource?,
+    ): Result<Unit> = videoLock.withLock { attachVideoLocked(track, video) }
+
+    private suspend fun attachVideoLocked(
+        track: Int,
+        video: VideoSource?,
     ): Result<Unit> {
         if (video != null) {
-            attachVideo(track, null)
+            attachVideoLocked(track, null)
             videoSources[track] = video
             if (video is Camera2Source) {
                 video.isTorchEnabled = isToucheEnabled
@@ -178,12 +197,14 @@ class MediaMixer(
             return
         }
         orientationEventListener.enable()
-        launch {
-            videoSources.forEach {
-                val track = it.key
-                val source = it.value
-                source.open(this@MediaMixer).onSuccess {
-                    screen.attachVideo(track, source)
+        launch(videoLifecycle) {
+            videoLock.withLock {
+                videoSources.forEach {
+                    val track = it.key
+                    val source = it.value
+                    source.open(this@MediaMixer).onSuccess {
+                        screen.attachVideo(track, source)
+                    }
                 }
             }
             audioSources.values.forEach { it.open(this@MediaMixer) }
@@ -199,12 +220,14 @@ class MediaMixer(
         }
         keepAlive = false
         orientationEventListener.disable()
-        launch {
-            videoSources.forEach {
-                val track = it.key
-                val source = it.value
-                source.close()
-                screen.attachVideo(track, null)
+        launch(videoLifecycle) {
+            videoLock.withLock {
+                videoSources.forEach {
+                    val track = it.key
+                    val source = it.value
+                    source.close()
+                    screen.attachVideo(track, null)
+                }
             }
             audioSources.values.forEach { it.close() }
         }
